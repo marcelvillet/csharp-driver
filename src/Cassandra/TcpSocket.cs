@@ -186,14 +186,14 @@ namespace Cassandra
             return socketConnectTask.Then(_ => ConnectSsl());
         }
 
-        private Task<bool> ConnectSsl()
+        private async Task<bool> ConnectSsl()
         {
             _logger.Verbose("Socket connected, starting SSL client authentication");
             //Stream mode: not the most performant but it has ssl support
             var targetHost = IPEndPoint.Address.ToString();
             //HostNameResolver is a sync operation but it can block
             //Use another thread
-            return Task.Factory.StartNew(() =>
+            await Task.Factory.StartNew(() =>
             {
                 try
                 {
@@ -201,44 +201,39 @@ namespace Cassandra
                 }
                 catch (Exception ex)
                 {
-                    _logger.Error(String.Format("SSL connection: Can not resolve host name for address {0}. Using the IP address instead of the host name. This may cause RemoteCertificateNameMismatch error during Cassandra host authentication. Note that the Cassandra node SSL certificate's CN(Common Name) must match the Cassandra node hostname.", targetHost), ex);
+                    _logger.Error(
+                        string.Format(
+                            "SSL connection: Can not resolve host name for address {0}. Using the IP address instead of the host name. This may cause RemoteCertificateNameMismatch error during Cassandra host authentication. Note that the Cassandra node SSL certificate's CN(Common Name) must match the Cassandra node hostname.",
+                            targetHost), ex);
                 }
-                return true;
-            }).Then(_ =>
-            {
-                _logger.Verbose("Starting SSL authentication");
-                var tcs = TaskHelper.TaskCompletionSourceWithTimeout<bool>(Options.ConnectTimeoutMillis,
-                    () => new TimeoutException("The timeout period elapsed prior to completion of SSL authentication operation."));
-                var sslStream = new SslStream(new NetworkStream(_socket), false, SSLOptions.RemoteCertValidationCallback, null);
-                _socketStream = sslStream;
-                try
-                {
-                    sslStream.BeginAuthenticateAsClient(targetHost, SSLOptions.CertificateCollection, SSLOptions.SslProtocol,
-                        SSLOptions.CheckCertificateRevocation,
-                        sslAsyncResult =>
-                        {
-                            try
-                            {
-                                sslStream.EndAuthenticateAsClient(sslAsyncResult);
-                                tcs.TrySetResult(true);
-                            }
-                            catch (Exception ex)
-                            {
-                                tcs.TrySetException(ex);
-                            }
-                        }, null);
-                }
-                catch (Exception ex)
-                {
-                    tcs.TrySetException(ex);
-                }
-                return tcs.Task;
-            }).ContinueSync(_ =>
-            {
-                _logger.Verbose("SSL authentication successful");
-                ReceiveAsync();
-                return true;
-            });
+            }).ConfigureAwait(false);
+
+            _logger.Verbose("Starting SSL authentication");
+            var sslStream = new SslStream(new NetworkStream(_socket), false, SSLOptions.RemoteCertValidationCallback, null);
+            _socketStream = sslStream;
+            // Use a timer to ensure that it does callback
+            var tcs = TaskHelper.TaskCompletionSourceWithTimeout<bool>(
+                Options.ConnectTimeoutMillis,
+                () => new TimeoutException("The timeout period elapsed prior to completion of SSL authentication operation."));
+            #pragma warning disable 4014
+            sslStream.AuthenticateAsClientAsync(targetHost,
+                                                SSLOptions.CertificateCollection,
+                                                SSLOptions.SslProtocol,
+                                                SSLOptions.CheckCertificateRevocation)
+                     .ContinueWith(t =>
+                     {
+                         if (t.Exception != null)
+                         {
+                             tcs.TrySetException(t.Exception.InnerException);
+                             return;
+                         }
+                         tcs.TrySetResult(true);
+                     }, TaskContinuationOptions.ExecuteSynchronously);
+            #pragma warning restore 4014
+            await tcs.Task.ConfigureAwait(false);
+            _logger.Verbose("SSL authentication successful");
+            ReceiveAsync();
+            return true;
         }
 
         /// <summary>
@@ -267,7 +262,9 @@ namespace Cassandra
             else
             {
                 //Stream mode
-                _socketStream.BeginRead(_receiveBuffer, 0, _receiveBuffer.Length, OnReceiveStreamCallback, null);
+                _socketStream
+                    .ReadAsync(_receiveBuffer, 0, _receiveBuffer.Length)
+                    .ContinueWith(OnReceiveStreamCallback, TaskContinuationOptions.ExecuteSynchronously);
             }
         }
 
@@ -306,27 +303,13 @@ namespace Cassandra
         }
 
         /// <summary>
-        /// Handles the callback for BeginRead on Stream mode
+        /// Handles the callback for Completed or Cancelled Task on Stream mode
         /// </summary>
-        protected void OnReceiveStreamCallback(IAsyncResult ar)
+        protected void OnReceiveStreamCallback(Task<int> readTask)
         {
-            try
+            if (readTask.Exception != null)
             {
-                var bytesRead = _socketStream.EndRead(ar);
-                if (bytesRead == 0)
-                {
-                    OnClosing();
-                    return;
-                }
-                //Emit event
-                if (Read != null)
-                {
-                    Read(_receiveBuffer, bytesRead);
-                }
-                ReceiveAsync();
-            }
-            catch (Exception ex)
-            {
+                var ex = readTask.Exception.InnerException;
                 if (ex is IOException && ex.InnerException is SocketException)
                 {
                     OnError((SocketException)ex.InnerException);
@@ -335,7 +318,27 @@ namespace Cassandra
                 {
                     OnError(ex);
                 }
+                return;
             }
+            var bytesRead = readTask.Result;
+            if (bytesRead == 0)
+            {
+                OnClosing();
+                return;
+            }
+            //Emit event
+            try
+            {
+                if (Read != null)
+                {
+                    Read(_receiveBuffer, bytesRead);
+                }
+            }
+            catch (Exception ex)
+            {
+                OnError(ex);
+            }
+            ReceiveAsync();
         }
 
         /// <summary>
@@ -355,16 +358,13 @@ namespace Cassandra
         }
 
         /// <summary>
-        /// Handles the callback for BeginWrite on Stream mode
+        /// Handles the continuation for WriteAsync faulted or Task on Stream mode
         /// </summary>
-        protected void OnSendStreamCallback(IAsyncResult ar)
+        protected void OnSendStreamCallback(Task writeTask)
         {
-            try
+            if (writeTask.Exception != null)
             {
-                _socketStream.EndWrite(ar);
-            }
-            catch (Exception ex)
-            {
+                var ex = writeTask.Exception.InnerException;
                 if (ex is IOException && ex.InnerException is SocketException)
                 {
                     OnError((SocketException)ex.InnerException);
@@ -373,6 +373,7 @@ namespace Cassandra
                 {
                     OnError(ex);
                 }
+                return;
             }
             OnWriteFlushed();
             if (WriteCompleted != null)
@@ -386,7 +387,7 @@ namespace Cassandra
             _isClosing = true;
             if (Closing != null)
             {
-                Closing();
+                Closing.Invoke();
             }
             if (_receiveSocketEvent != null)
             {
@@ -443,7 +444,9 @@ namespace Cassandra
             else
             {
                 var length = (int) stream.Length;
-                _socketStream.BeginWrite(stream.GetBuffer(), 0, length, OnSendStreamCallback, null);
+                _socketStream
+                    .WriteAsync(stream.GetBuffer(), 0, length)
+                    .ContinueWith(OnSendStreamCallback, TaskContinuationOptions.ExecuteSynchronously);
             }
         }
 
