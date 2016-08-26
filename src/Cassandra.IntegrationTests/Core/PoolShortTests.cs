@@ -23,8 +23,8 @@ namespace Cassandra.IntegrationTests.Core
             TestClusterManager.TryRemove();
         }
 
-        [Test]
-        public void StopForce_With_Inflight_Requests()
+        [Test, Timeout(1000 * 60 * 8)]
+        public void StopForce_With_Inflight_Requests([Range(1, 20)]int r)
         {
             if (TestUtils.IsWin && CassandraVersion.Major < 3)
             {
