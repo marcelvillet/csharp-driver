@@ -26,6 +26,10 @@ namespace Cassandra.IntegrationTests.Core
         [Test]
         public void StopForce_With_Inflight_Requests()
         {
+            if (TestUtils.IsWin && CassandraVersion.Major < 3)
+            {
+                Assert.Ignore("On Windows this test should run against C* 3.0+");
+            }
             var testCluster = TestClusterManager.CreateNew(2);
             var builder = Cluster.Builder()
                 .AddContactPoint(testCluster.InitialContactPoint)

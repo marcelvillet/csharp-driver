@@ -302,6 +302,7 @@ namespace Cassandra
                 //Callback for every pending operation
                 foreach (var item in _pendingOperations)
                 {
+                    // Note that InvokeCallback() might be concurrently called by a different thread.
                     item.Value.InvokeCallback(ex);
                 }
                 _pendingOperations.Clear();
@@ -409,7 +410,7 @@ namespace Cassandra
             //Init TcpSocket
             _tcpSocket.Init();
             _tcpSocket.Error += CancelPending;
-            _tcpSocket.Closing += () => CancelPending(null, null);
+            _tcpSocket.Closing += () => CancelPending(null);
             //Read and write event handlers are going to be invoked using IO Threads
             _tcpSocket.Read += ReadHandler;
             _tcpSocket.WriteCompleted += WriteCompletedHandler;
@@ -587,7 +588,9 @@ namespace Cassandra
                     state = new OperationState(EventHandler);
                 }
                 stream.Write(buffer, offset, remainingBodyLength);
-                var callback = state.SetCompleted();
+                // State can be null when the Connection is being closed concurrently
+                // The original callback is being called with an error, use a Noop here
+                var callback = state != null ? state.SetCompleted() : OperationState.Noop;
                 operationCallbacks.AddLast(CreateResponseAction(header, callback));
                 offset += remainingBodyLength;
             }
@@ -793,7 +796,7 @@ namespace Cassandra
         /// Removes an operation from pending and frees the stream id
         /// </summary>
         /// <param name="streamId"></param>
-        internal protected virtual OperationState RemoveFromPending(short streamId)
+        protected internal virtual OperationState RemoveFromPending(short streamId)
         {
             OperationState state;
             if (_pendingOperations.TryRemove(streamId, out state))
