@@ -14,7 +14,7 @@ using Cassandra.Tests;
 
 namespace Cassandra.IntegrationTests.Core
 {
-    [TestFixture, Category("short")]
+    [TestFixture, Category("short"), Category("debug")]
     public class PoolShortTests : TestGlobals
     {
         [TearDown]
@@ -24,7 +24,7 @@ namespace Cassandra.IntegrationTests.Core
         }
 
         [Test, Timeout(1000 * 60 * 8)]
-        public void StopForce_With_Inflight_Requests([Range(1, 20)]int r)
+        public void StopForce_With_Inflight_Requests([Range(1, 30)]int r)
         {
             if (TestUtils.IsWin && CassandraVersion.Major < 3)
             {

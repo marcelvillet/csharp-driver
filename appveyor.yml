@@ -32,9 +32,8 @@ test:
     - src/Cassandra.IntegrationTests/bin/$(configuration)/Cassandra.IntegrationTests.dll
 
   categories:
-    except:
-      - long
-      - duration
+    only:
+      - debug
 
 on_failure:
   - ps: >-
