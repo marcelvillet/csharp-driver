@@ -295,17 +295,20 @@ namespace Cassandra
                 }
                 //Callback all the items in the write queue
                 OperationState state;
-                while (_writeQueue.TryDequeue(out state))
+                lock (_writeLock)
                 {
-                    state.InvokeCallback(ex);
+                    while (_writeQueue.TryDequeue(out state))
+                    {
+                        state.InvokeCallback(ex);
+                    }
+                    //Callback for every pending operation
+                    foreach (var item in _pendingOperations)
+                    {
+                        // Note that InvokeCallback() might be concurrently called by a different thread.
+                        item.Value.InvokeCallback(ex);
+                    }
+                    _pendingOperations.Clear();
                 }
-                //Callback for every pending operation
-                foreach (var item in _pendingOperations)
-                {
-                    // Note that InvokeCallback() might be concurrently called by a different thread.
-                    item.Value.InvokeCallback(ex);
-                }
-                _pendingOperations.Clear();
                 Interlocked.Exchange(ref _inFlight, 0);
                 if (_pendingWaitHandle != null)
                 {
@@ -719,11 +722,23 @@ namespace Cassandra
                 return;
             }
             //Start a new task using the TaskScheduler for writing
-            Task.Factory.StartNew(RunWriteQueueAction, CancellationToken.None, TaskCreationOptions.None, TaskScheduler.Default);
+            Task.Factory.StartNew(() =>
+            {
+                lock (_writeLock)
+                {
+                    RunWriteQueueAction();
+                }
+            }, CancellationToken.None, TaskCreationOptions.None, TaskScheduler.Default);
         }
+
+        private readonly object _writeLock = new object();
 
         private void RunWriteQueueAction()
         {
+            if (_isCanceled)
+            {
+                return;
+            }
             //Dequeue all items until threshold is passed
             long totalLength = 0;
             RecyclableMemoryStream stream = null;
@@ -778,7 +793,7 @@ namespace Cassandra
             {
                 //nothing to write
                 Interlocked.Exchange(ref _isWriteQueueRuning, 0);
-                if (streamIdsAvailable && !_writeQueue.IsEmpty)
+                if (streamIdsAvailable && !_writeQueue.IsEmpty && !_isCanceled)
                 {
                     //The write queue is not empty
                     //An item was added to the queue but we were running: try to launch a new queue
