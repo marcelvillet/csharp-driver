@@ -295,20 +295,17 @@ namespace Cassandra
                 }
                 //Callback all the items in the write queue
                 OperationState state;
-                lock (_writeLock)
+                while (_writeQueue.TryDequeue(out state))
                 {
-                    while (_writeQueue.TryDequeue(out state))
-                    {
-                        state.InvokeCallback(ex);
-                    }
-                    //Callback for every pending operation
-                    foreach (var item in _pendingOperations)
-                    {
-                        // Note that InvokeCallback() might be concurrently called by a different thread.
-                        item.Value.InvokeCallback(ex);
-                    }
-                    _pendingOperations.Clear();
+                    state.InvokeCallback(ex);
                 }
+                //Callback for every pending operation
+                foreach (var item in _pendingOperations)
+                {
+                    // Note that InvokeCallback() might be concurrently called by a different thread.
+                    item.Value.InvokeCallback(ex);
+                }
+                _pendingOperations.Clear();
                 Interlocked.Exchange(ref _inFlight, 0);
                 if (_pendingWaitHandle != null)
                 {
@@ -316,7 +313,11 @@ namespace Cassandra
                 }
                 Configuration.Timer.NewTimeout(_ =>
                 {
-                    Console.WriteLine("Cancel pending timer: {0} pending; {1} in write queue", _pendingOperations.Count, _writeQueue.Count);
+                    Console.WriteLine(
+                        "Cancel pending timer: {0} pending; {1} in write queue; {2} free ops", 
+                        _pendingOperations.Count, 
+                        _writeQueue.Count, 
+                        _freeOperations.Count);
                 }, null, 2000);
             }
         }
@@ -722,24 +723,11 @@ namespace Cassandra
                 return;
             }
             //Start a new task using the TaskScheduler for writing
-            Task.Factory.StartNew(() =>
-            {
-                lock (_writeLock)
-                {
-                    RunWriteQueueAction();
-                }
-            }, CancellationToken.None, TaskCreationOptions.None, TaskScheduler.Default);
+            Task.Factory.StartNew(RunWriteQueueAction, CancellationToken.None, TaskCreationOptions.None, TaskScheduler.Default);
         }
-
-        private readonly object _writeLock = new object();
 
         private void RunWriteQueueAction()
         {
-            if (_isCanceled)
-            {
-                Console.WriteLine("RunWriteQueueAction cancelled: {0} pending; {1} in write queue", _pendingOperations.Count, _writeQueue.Count);
-                return;
-            }
             //Dequeue all items until threshold is passed
             long totalLength = 0;
             RecyclableMemoryStream stream = null;
