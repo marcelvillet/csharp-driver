@@ -44,9 +44,9 @@ namespace Cassandra.IntegrationTests.Core
                 session.Execute(string.Format(TestUtils.CreateKeyspaceSimpleFormat, "ks1", 2));
                 session.Execute("CREATE TABLE ks1.table1 (id1 int, id2 int, PRIMARY KEY (id1, id2))");
                 var ps = session.Prepare("INSERT INTO ks1.table1 (id1, id2) VALUES (?, ?)");
-                Trace.TraceInformation("--Warmup");
+                Console.WriteLine("--Warmup");
                 Task.Factory.StartNew(() => ExecuteMultiple(testCluster, session, ps, false, 2).Wait()).Wait();
-                Trace.TraceInformation("--Starting");
+                Console.WriteLine("--Starting");
                 Task.Factory.StartNew(() => ExecuteMultiple(testCluster, session, ps, true, 200000).Wait()).Wait();
             }
         }
@@ -76,13 +76,13 @@ namespace Cassandra.IntegrationTests.Core
                         var received = Interlocked.Increment(ref receivedCounter);
                         if (stopNode && received == halfway)
                         {
-                            Trace.TraceInformation("Stopping forcefully node2");
+                            Console.WriteLine("Stopping forcefully node2");
                             testCluster.StopForce(2);
                         }
                         if (received == repeatLength)
                         {
                             // Mark this as finished
-                            Trace.TraceInformation("--Marking as completed");
+                            Console.WriteLine("--Marking as completed");
                             tcs.TrySetResult(true);
                         }
                     }, TaskContinuationOptions.ExecuteSynchronously);
