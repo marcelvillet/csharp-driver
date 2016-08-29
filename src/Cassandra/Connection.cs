@@ -311,6 +311,10 @@ namespace Cassandra
                 {
                     _pendingWaitHandle.Set();
                 }
+                Configuration.Timer.NewTimeout(_ =>
+                {
+                    Console.WriteLine("Cancel pending timer: {0} pending; {1} in write queue", _pendingOperations.Count, _writeQueue.Count);
+                }, null, 2000);
             }
         }
 
