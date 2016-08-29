@@ -57,6 +57,10 @@ namespace Cassandra.IntegrationTests.Core
             var semaphore = new AsyncSemaphore(8000);
             var receivedCounter = 0;
             var halfway = repeatLength / 2;
+            var timer = new Timer(_ =>
+            {
+                Console.WriteLine("Received {0}", Thread.VolatileRead(ref receivedCounter));
+            }, null, Timeout.Infinite, 1000L);
             for (var i = 0; i < repeatLength; i++)
             {
                 var index = i;
@@ -83,6 +87,7 @@ namespace Cassandra.IntegrationTests.Core
                         {
                             // Mark this as finished
                             Console.WriteLine("--Marking as completed");
+                            timer.Dispose();
                             tcs.TrySetResult(true);
                         }
                     }, TaskContinuationOptions.ExecuteSynchronously);
