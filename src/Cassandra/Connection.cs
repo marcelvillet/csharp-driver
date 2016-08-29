@@ -273,14 +273,6 @@ namespace Cassandra
                 {
                     Logger.Verbose("The socket status received was {0}", socketError.Value);
                 }
-                if (_pendingOperations.IsEmpty && _writeQueue.IsEmpty)
-                {
-                    if (_pendingWaitHandle != null)
-                    {
-                        _pendingWaitHandle.Set();
-                    }
-                    return;
-                }
                 if (ex == null || ex is ObjectDisposedException)
                 {
                     if (socketError != null)
@@ -293,6 +285,7 @@ namespace Cassandra
                         ex = new SocketException((int)SocketError.NotConnected);
                     }
                 }
+                Console.WriteLine("Cancelling #{0}, with {1} pending and {2} in write queue", GetHashCode(), _pendingOperations.Count, _writeQueue.Count);
                 //Callback all the items in the write queue
                 OperationState state;
                 while (_writeQueue.TryDequeue(out state))
@@ -314,11 +307,14 @@ namespace Cassandra
                 Configuration.Timer.NewTimeout(_ =>
                 {
                     Console.WriteLine(
-                        "Cancel pending timer: {0} pending; {1} in write queue; {2} free ops", 
+                        "Cancel pending timer: {0} pending; {1} in write queue", 
                         _pendingOperations.Count, 
-                        _writeQueue.Count, 
-                        _freeOperations.Count);
+                        _writeQueue.Count);
                 }, null, 2000);
+                if (_pendingWaitHandle != null)
+                {
+                    _pendingWaitHandle.Set();
+                }
             }
         }
 
