@@ -60,7 +60,7 @@ namespace Cassandra.IntegrationTests.Core
             var timer = new Timer(_ =>
             {
                 Console.WriteLine("Received {0}", Thread.VolatileRead(ref receivedCounter));
-            }, null, Timeout.Infinite, 1000L);
+            }, null, 1000L, 1000L);
             for (var i = 0; i < repeatLength; i++)
             {
                 var index = i;
