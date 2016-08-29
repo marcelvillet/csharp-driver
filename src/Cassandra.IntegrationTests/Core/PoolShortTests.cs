@@ -17,6 +17,17 @@ namespace Cassandra.IntegrationTests.Core
     [TestFixture, Category("short"), Category("debug")]
     public class PoolShortTests : TestGlobals
     {
+        [TestFixtureSetUp]
+        public void OnTestFixtureSetUp()
+        {
+            AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
+        }
+
+        private void CurrentDomain_UnhandledException(object sender, UnhandledExceptionEventArgs e)
+        {
+            Console.WriteLine("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!Unhandled exception: {0}; Is terminating: {1}", e.ExceptionObject, e.IsTerminating);
+        }
+
         [TearDown]
         public void OnTearDown()
         {
@@ -60,7 +71,7 @@ namespace Cassandra.IntegrationTests.Core
             var timer = new Timer(_ =>
             {
                 Console.WriteLine("Received {0}", Thread.VolatileRead(ref receivedCounter));
-            }, null, 1000L, 1000L);
+            }, null, 60000L, 60000L);
             for (var i = 0; i < repeatLength; i++)
             {
                 var index = i;
