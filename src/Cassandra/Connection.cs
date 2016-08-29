@@ -737,6 +737,7 @@ namespace Cassandra
         {
             if (_isCanceled)
             {
+                Console.WriteLine("RunWriteQueueAction cancelled: {0} pending; {1} in write queue", _pendingOperations.Count, _writeQueue.Count);
                 return;
             }
             //Dequeue all items until threshold is passed
