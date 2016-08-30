@@ -267,38 +267,41 @@ namespace Cassandra
             //Multiple IO worker threads may been notifying that the socket is closing/in error
             lock (_cancelLock)
             {
-                _isCanceled = true;
-                Logger.Info("Canceling pending operations {0} and write queue {1}", Thread.VolatileRead(ref _inFlight), _writeQueue.Count);
-                if (socketError != null)
+                lock (_writeLock)
                 {
-                    Logger.Verbose("The socket status received was {0}", socketError.Value);
-                }
-                if (ex == null || ex is ObjectDisposedException)
-                {
+                    _isCanceled = true;
+                    Logger.Info("Canceling pending operations {0} and write queue {1}", Thread.VolatileRead(ref _inFlight), _writeQueue.Count);
                     if (socketError != null)
                     {
-                        ex = new SocketException((int)socketError.Value);
+                        Logger.Verbose("The socket status received was {0}", socketError.Value);
                     }
-                    else
+                    if (ex == null || ex is ObjectDisposedException)
                     {
-                        //It is closing
-                        ex = new SocketException((int)SocketError.NotConnected);
+                        if (socketError != null)
+                        {
+                            ex = new SocketException((int)socketError.Value);
+                        }
+                        else
+                        {
+                            //It is closing
+                            ex = new SocketException((int)SocketError.NotConnected);
+                        }
                     }
+                    Console.WriteLine("Cancelling #{0}, with {1} pending and {2} in write queue", GetHashCode(), _pendingOperations.Count, _writeQueue.Count);
+                    //Callback all the items in the write queue
+                    OperationState state;
+                    while (_writeQueue.TryDequeue(out state))
+                    {
+                        state.InvokeCallback(ex);
+                    }
+                    //Callback for every pending operation
+                    foreach (var item in _pendingOperations)
+                    {
+                        // Note that InvokeCallback() might be concurrently called by a different thread.
+                        item.Value.InvokeCallback(ex);
+                    }
+                    _pendingOperations.Clear();
                 }
-                Console.WriteLine("Cancelling #{0}, with {1} pending and {2} in write queue", GetHashCode(), _pendingOperations.Count, _writeQueue.Count);
-                //Callback all the items in the write queue
-                OperationState state;
-                while (_writeQueue.TryDequeue(out state))
-                {
-                    state.InvokeCallback(ex);
-                }
-                //Callback for every pending operation
-                foreach (var item in _pendingOperations)
-                {
-                    // Note that InvokeCallback() might be concurrently called by a different thread.
-                    item.Value.InvokeCallback(ex);
-                }
-                _pendingOperations.Clear();
                 Interlocked.Exchange(ref _inFlight, 0);
                 if (_pendingWaitHandle != null)
                 {
@@ -503,6 +506,7 @@ namespace Cassandra
         {
             if (length <= 0)
             {
+                Console.WriteLine("!!!!RECEIVED 0 LENGTH BUFFER");
                 return false;
             }
             byte protocolVersion;
@@ -705,6 +709,7 @@ namespace Cassandra
                 Request = request,
                 TimeoutMillis = timeoutMillis > 0 ? timeoutMillis : Configuration.SocketOptions.ReadTimeoutMillis
             };
+            //TODO: Can be cancelled by now
             _writeQueue.Enqueue(state);
             RunWriteQueue();
             return state;
@@ -721,6 +726,8 @@ namespace Cassandra
             //Start a new task using the TaskScheduler for writing
             Task.Factory.StartNew(RunWriteQueueAction, CancellationToken.None, TaskCreationOptions.None, TaskScheduler.Default);
         }
+
+        private readonly object _writeLock = new object();
 
         private void RunWriteQueueAction()
         {
@@ -747,7 +754,15 @@ namespace Cassandra
                     break;
                 }
                 Logger.Verbose("Sending #{0} for {1} to {2}", streamId, state.Request.GetType().Name, Address);
-                _pendingOperations.AddOrUpdate(streamId, state, (k, oldValue) => state);
+                lock (_writeLock)
+                {
+                    if (_isCanceled)
+                    {
+                        state.InvokeCallback(new SocketException((int) SocketError.NotConnected));
+                        break;
+                    }
+                    _pendingOperations.AddOrUpdate(streamId, state, (k, oldValue) => state);
+                }
                 Interlocked.Increment(ref _inFlight);
                 int frameLength;
                 try
