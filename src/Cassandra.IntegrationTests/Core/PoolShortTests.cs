@@ -57,53 +57,62 @@ namespace Cassandra.IntegrationTests.Core
                 session.Execute("CREATE TABLE ks1.table1 (id1 int, id2 int, PRIMARY KEY (id1, id2))");
                 var ps = session.Prepare("INSERT INTO ks1.table1 (id1, id2) VALUES (?, ?)");
                 Console.WriteLine("--Warmup");
-                Task.Factory.StartNew(() => ExecuteMultiple(testCluster, session, ps, false, 2).Wait()).Wait();
+                Task.Factory.StartNew(() => ExecuteMultiple(testCluster, session, ps, false, 1, 2).Wait()).Wait();
                 Console.WriteLine("--Starting");
-                Task.Factory.StartNew(() => ExecuteMultiple(testCluster, session, ps, true, 200000).Wait()).Wait();
+                Task.Factory.StartNew(() => ExecuteMultiple(testCluster, session, ps, true, 8000, 200000).Wait()).Wait();
             }
         }
 
-        private Task<bool> ExecuteMultiple(ITestCluster testCluster, Session session, PreparedStatement ps, bool stopNode, int repeatLength)
+        private Task<bool> ExecuteMultiple(ITestCluster testCluster, Session session, PreparedStatement ps, bool stopNode, int maxConcurrency, int repeatLength)
         {
             var tcs = new TaskCompletionSource<bool>();
-            var semaphore = new AsyncSemaphore(8000);
             var receivedCounter = 0;
+            var sendCounter = 0;
+            var currentlySentCounter = 0;
             var halfway = repeatLength / 2;
             var timer = new Timer(_ =>
             {
                 Console.WriteLine("Received {0}", Thread.VolatileRead(ref receivedCounter));
             }, null, 60000L, 60000L);
-            for (var i = 0; i < repeatLength; i++)
+            Action sendNew = null;
+            sendNew = () =>
             {
-                var index = i;
-                semaphore.WaitAsync().ContinueWith(_ =>
+                var sent = Interlocked.Increment(ref sendCounter);
+                if (sent > repeatLength)
                 {
-                    var statement = ps.Bind(index % 100, index);
-                    var t1 = session.ExecuteAsync(statement);
-                    t1.ContinueWith(t =>
+                    return;
+                }
+                Interlocked.Increment(ref currentlySentCounter);
+                var statement = ps.Bind(sent % 100, sent);
+                var executeTask = session.ExecuteAsync(statement);
+                executeTask.ContinueWith(t =>
+                {
+                    if (t.Exception != null)
                     {
-                        semaphore.Release();
-                        Thread.MemoryBarrier();
-                        if (t.Exception != null)
-                        {
-                            tcs.TrySetException(t.Exception.InnerException);
-                            return;
-                        }
-                        var received = Interlocked.Increment(ref receivedCounter);
-                        if (stopNode && received == halfway)
-                        {
-                            Console.WriteLine("Stopping forcefully node2");
-                            testCluster.StopForce(2);
-                        }
-                        if (received == repeatLength)
-                        {
-                            // Mark this as finished
-                            Console.WriteLine("--Marking as completed");
-                            timer.Dispose();
-                            tcs.TrySetResult(true);
-                        }
-                    });
+                        tcs.TrySetException(t.Exception.InnerException);
+                        return;
+                    }
+                    var received = Interlocked.Increment(ref receivedCounter);
+                    if (stopNode && received == halfway)
+                    {
+                        Console.WriteLine("--Stopping forcefully node2");
+                        testCluster.StopForce(2);
+                    }
+                    if (received == repeatLength)
+                    {
+                        // Mark this as finished
+                        Console.WriteLine("--Marking as completed");
+                        timer.Dispose();
+                        tcs.TrySetResult(true);
+                        return;
+                    }
+                    sendNew();
                 }, TaskContinuationOptions.ExecuteSynchronously);
+            };
+
+            for (var i = 0; i < maxConcurrency; i++)
+            {
+                sendNew();
             }
             return tcs.Task;
         }
