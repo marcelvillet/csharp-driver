@@ -48,6 +48,7 @@ namespace Cassandra.IntegrationTests.Core
                     .SetCoreConnectionsPerHost(HostDistance.Local, 4)
                     .SetMaxConnectionsPerHost(HostDistance.Local, 4))
                 .WithRetryPolicy(AlwaysIgnoreRetryPolicy.Instance)
+                .WithSocketOptions(new SocketOptions().SetReadTimeoutMillis(0))
                 .WithLoadBalancingPolicy(new RoundRobinPolicy());
             using (var cluster = builder.Build())
             {
