@@ -287,7 +287,7 @@ namespace Cassandra
                             ex = new SocketException((int)SocketError.NotConnected);
                         }
                     }
-                    Console.WriteLine("Cancelling #{0}, with {1} pending and {2} in write queue", GetHashCode(), _pendingOperations.Count, _writeQueue.Count);
+                    Console.WriteLine("Cancelling #{0}, with {1} pending, {2} in write queue and {3} in flight", GetHashCode(), _pendingOperations.Count, _writeQueue.Count, Thread.VolatileRead(ref _inFlight));
                     //Callback all the items in the write queue
                     OperationState state;
                     while (_writeQueue.TryDequeue(out state))
@@ -310,9 +310,10 @@ namespace Cassandra
                 Configuration.Timer.NewTimeout(_ =>
                 {
                     Console.WriteLine(
-                        "Cancel pending timer: {0} pending; {1} in write queue", 
-                        _pendingOperations.Count, 
-                        _writeQueue.Count);
+                        "Cancel pending timer: {0} pending; {1} in write queue; {3} in flight", 
+                        _pendingOperations.Count,
+                        _writeQueue.Count,
+                        Thread.VolatileRead(ref _inFlight));
                 }, null, 2000);
                 if (_pendingWaitHandle != null)
                 {
@@ -762,8 +763,8 @@ namespace Cassandra
                         break;
                     }
                     _pendingOperations.AddOrUpdate(streamId, state, (k, oldValue) => state);
+                    Interlocked.Increment(ref _inFlight);
                 }
-                Interlocked.Increment(ref _inFlight);
                 int frameLength;
                 try
                 {
