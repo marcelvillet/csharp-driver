@@ -793,8 +793,13 @@ namespace Cassandra
             {
                 //nothing to write
                 Interlocked.Exchange(ref _isWriteQueueRuning, 0);
-                if (streamIdsAvailable && !_writeQueue.IsEmpty && !_isCanceled)
+                if (streamIdsAvailable && !_writeQueue.IsEmpty)
                 {
+                    if (_isCanceled)
+                    {
+                        CancelPending(null);
+                        return;
+                    }
                     //The write queue is not empty
                     //An item was added to the queue but we were running: try to launch a new queue
                     RunWriteQueue();
