@@ -103,7 +103,7 @@ namespace Cassandra.IntegrationTests.Core
                             tcs.TrySetResult(true);
                         }
                     });
-                });
+                }, TaskContinuationOptions.ExecuteSynchronously);
             }
             return tcs.Task;
         }
