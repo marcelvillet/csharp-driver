@@ -310,7 +310,7 @@ namespace Cassandra
                 Configuration.Timer.NewTimeout(_ =>
                 {
                     Console.WriteLine(
-                        "Cancel pending timer: {0} pending; {1} in write queue; {3} in flight", 
+                        "Cancel pending timer: {0} pending; {1} in write queue; {2} in flight", 
                         _pendingOperations.Count,
                         _writeQueue.Count,
                         Thread.VolatileRead(ref _inFlight));
